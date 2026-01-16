@@ -39,13 +39,13 @@ jobs:
       - name: Update major version tag
         id: update-tag
         shell: bash
+        env:
+          MAJOR: ${{ steps.version.outputs.major }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          MAJOR="${{ steps.version.outputs.major }}"
-          VERSION="${{ steps.version.outputs.version }}"
 
           # Delete local tag if exists, then create new one
           git tag -d "$MAJOR" 2>/dev/null || true

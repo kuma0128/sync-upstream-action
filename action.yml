@@ -70,7 +70,9 @@ runs:
         fi
 
         # Validate upstream_repo format (owner/repo)
-        if [[ ! "$UPSTREAM_REPO" =~ ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ ]]; then
+        # GitHub usernames: alphanumeric or hyphens, cannot start/end with hyphen
+        # GitHub repo names: alphanumeric, hyphens, underscores, periods, cannot start with period
+        if [[ ! "$UPSTREAM_REPO" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?/[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]]; then
           echo "::error::Invalid upstream_repo format '$UPSTREAM_REPO'. Expected 'owner/repo'."
           exit 1
         fi
@@ -186,12 +188,20 @@ runs:
           if [ $GH_EXIT_CODE -ne 0 ]; then
             echo "::warning::Failed to check for existing PRs - proceeding with PR creation"
           elif [ -n "$EXISTING_PR_NUMBER" ] && [ "$EXISTING_PR_NUMBER" != "null" ]; then
-            EXISTING_PR_URL=$(gh pr view "$EXISTING_PR_NUMBER" --json url --jq '.url')
-            echo "::notice::Existing upstream sync PR found: $EXISTING_PR_URL - skipping PR creation"
-            echo "pr_url=$EXISTING_PR_URL" >> $GITHUB_OUTPUT
-            echo "pr_number=$EXISTING_PR_NUMBER" >> $GITHUB_OUTPUT
-            echo "skipped=true" >> $GITHUB_OUTPUT
-            exit 0
+            set +e
+            EXISTING_PR_URL=$(gh pr view "$EXISTING_PR_NUMBER" --json url --jq '.url' 2>/dev/null)
+            VIEW_EXIT_CODE=$?
+            set -e
+
+            if [ $VIEW_EXIT_CODE -ne 0 ]; then
+              echo "::warning::Failed to get existing PR details - proceeding with PR creation"
+            else
+              echo "::notice::Existing upstream sync PR found: $EXISTING_PR_URL - skipping PR creation"
+              echo "pr_url=$EXISTING_PR_URL" >> $GITHUB_OUTPUT
+              echo "pr_number=$EXISTING_PR_NUMBER" >> $GITHUB_OUTPUT
+              echo "skipped=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
           fi
         fi
 
