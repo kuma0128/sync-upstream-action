@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Required: full git history is needed to compare with upstream
 
       - uses: kuma0128/sync-upstream-action@v1
         with:
