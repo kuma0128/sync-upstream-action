@@ -1,23 +1,23 @@
 # Sync Upstream Action
 
-Fork リポジトリを upstream と同期する GitHub Action です。
+A GitHub Action to sync your fork with an upstream repository.
 
-## 特徴
+## Features
 
-- **PR モード（デフォルト）**: Pull Request を作成。コンフリクトがあっても PR は作成され、手動で解決可能
-- **Direct モード**: 直接 target ブランチにプッシュ。コンフリクト時は失敗
-- 変更がない場合は何もしない
+- **PR mode (default)**: Creates a Pull Request. Even if conflicts occur, the PR is still created for manual resolution
+- **Direct mode**: Pushes directly to the target branch. Fails if conflicts occur
+- Does nothing if already up to date
 
-## 使い方
+## Usage
 
-### PR モード（推奨）
+### PR Mode (Recommended)
 
 ```yaml
 name: Sync from Upstream
 
 on:
   schedule:
-    - cron: '0 0 * * 0'  # 毎週日曜
+    - cron: '0 0 * * 0'  # Every Sunday
   workflow_dispatch:
 
 jobs:
@@ -39,7 +39,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### Direct モード
+### Direct Mode
 
 ```yaml
       - uses: kuma0128/sync-upstream-action@v1
@@ -47,7 +47,7 @@ jobs:
           upstream_repo: 'awslabs/ssosync'
           upstream_branch: 'master'
           target_branch: 'master'
-          mode: 'direct'  # 直接プッシュ
+          mode: 'direct'  # Push directly
           token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
@@ -55,23 +55,23 @@ jobs:
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
-| `upstream_repo` | Yes | - | Upstream リポジトリ (例: `awslabs/ssosync`) |
-| `upstream_branch` | No | `main` | 同期元のブランチ |
-| `target_branch` | No | `main` | 同期先のブランチ |
-| `mode` | No | `pr` | `pr`: PR作成、`direct`: 直接プッシュ |
-| `pr_title` | No | `chore: Sync with upstream` | PR のタイトル（PR モードのみ） |
-| `pr_body` | No | 自動生成 | PR の本文（PR モードのみ） |
-| `pr_labels` | No | `upstream-sync` | PR につけるラベル（PR モードのみ） |
-| `token` | Yes | - | GitHub token (`contents: write`, `pull-requests: write` 権限が必要) |
+| `upstream_repo` | Yes | - | Upstream repository (e.g., `awslabs/ssosync`) |
+| `upstream_branch` | No | `main` | Branch to sync from |
+| `target_branch` | No | `main` | Branch to sync to |
+| `mode` | No | `pr` | `pr`: Create PR, `direct`: Push directly |
+| `pr_title` | No | `chore: Sync with upstream` | PR title (PR mode only) |
+| `pr_body` | No | Auto-generated | PR body (PR mode only) |
+| `pr_labels` | No | `upstream-sync` | Labels for the PR (PR mode only) |
+| `token` | Yes | - | GitHub token (requires `contents: write`, `pull-requests: write`) |
 
 ## Outputs
 
 | Name | Description |
 |------|-------------|
-| `has_changes` | 同期する変更があるか (`true`/`false`) |
-| `commits` | upstream から遅れているコミット数 |
-| `pr_number` | 作成された PR の番号 |
-| `pr_url` | 作成された PR の URL |
+| `has_changes` | Whether there are changes to sync (`true`/`false`) |
+| `commits` | Number of commits behind upstream |
+| `pr_number` | Created PR number (if any) |
+| `pr_url` | Created PR URL (if any) |
 
 ## License
 
