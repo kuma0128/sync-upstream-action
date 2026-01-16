@@ -21,6 +21,13 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
+
+          # Validate semver format (v1.2.3)
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format '$VERSION'. Expected 'vX.Y.Z' (e.g., v1.2.3)."
+            exit 1
+          fi
+
           MAJOR=${VERSION%%.*}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "major=$MAJOR" >> $GITHUB_OUTPUT
@@ -28,6 +35,7 @@ jobs:
           echo "Major version tag: $MAJOR"
 
       - name: Update major version tag
+        id: update-tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
