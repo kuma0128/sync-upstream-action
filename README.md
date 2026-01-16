@@ -34,8 +34,6 @@ jobs:
       - uses: kuma0128/sync-upstream-action@v1
         with:
           upstream_repo: 'awslabs/ssosync'
-          upstream_branch: 'master'
-          target_branch: 'master'
           token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
@@ -45,8 +43,6 @@ jobs:
       - uses: kuma0128/sync-upstream-action@v1
         with:
           upstream_repo: 'awslabs/ssosync'
-          upstream_branch: 'master'
-          target_branch: 'master'
           mode: 'direct'  # Push directly
           token: ${{ secrets.GITHUB_TOKEN }}
 ```
