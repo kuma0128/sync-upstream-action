@@ -1,4 +1,4 @@
-name: 'Sync Upstream'
+name: 'Sync Upstream PR'
 description: 'Sync fork with upstream repository via Pull Request or direct push'
 author: 'kuma0128'
 

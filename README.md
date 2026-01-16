@@ -1,4 +1,4 @@
-# Sync Upstream Action
+# Sync Upstream PR
 
 A GitHub Action to sync your fork with an upstream repository.
 
