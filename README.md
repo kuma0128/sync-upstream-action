@@ -7,6 +7,7 @@ A GitHub Action to sync your fork with an upstream repository.
 - **PR mode (default)**: Creates a Pull Request. Even if conflicts occur, the PR is still created for manual resolution
 - **Direct mode**: Pushes directly to the target branch. Fails if conflicts occur
 - Does nothing if already up to date
+- **Duplicate PR prevention**: Skips PR creation if an open PR with the same label already exists
 
 ## Usage
 
@@ -68,6 +69,7 @@ jobs:
 | `commits` | Number of commits behind upstream |
 | `pr_number` | Created PR number (if any) |
 | `pr_url` | Created PR URL (if any) |
+| `skipped` | Whether PR creation was skipped due to existing open PR (`true`/empty) |
 
 ## License
 

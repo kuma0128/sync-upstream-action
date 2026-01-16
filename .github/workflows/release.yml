@@ -19,7 +19,9 @@ jobs:
 
       - name: Get version info
         id: version
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION=${GITHUB_REF#refs/tags/}
 
           # Validate semver format (v1.2.3)
@@ -36,7 +38,9 @@ jobs:
 
       - name: Update major version tag
         id: update-tag
+        shell: bash
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 

@@ -51,6 +51,9 @@ outputs:
   pr_url:
     description: 'Created PR URL (if any)'
     value: ${{ steps.create-pr.outputs.pr_url }}
+  skipped:
+    description: 'Whether PR creation was skipped due to existing open PR'
+    value: ${{ steps.create-pr.outputs.skipped }}
 
 runs:
   using: 'composite'
@@ -168,15 +171,28 @@ runs:
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
-        # Check for existing open sync PRs
-        EXISTING_PR=$(gh pr list --base "$TARGET_BRANCH" --label "upstream-sync" --state open --json number,url --jq '.[0]')
-        if [ -n "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
-          EXISTING_PR_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number')
-          EXISTING_PR_URL=$(echo "$EXISTING_PR" | jq -r '.url')
-          echo "::notice::Existing upstream sync PR found: $EXISTING_PR_URL - skipping PR creation"
-          echo "pr_url=$EXISTING_PR_URL" >> $GITHUB_OUTPUT
-          echo "pr_number=$EXISTING_PR_NUMBER" >> $GITHUB_OUTPUT
-          exit 0
+        # Check for existing open sync PRs using the first configured label
+        FIRST_LABEL=""
+        if [ -n "$PR_LABELS" ]; then
+          FIRST_LABEL=$(echo "$PR_LABELS" | cut -d',' -f1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        fi
+
+        if [ -n "$FIRST_LABEL" ]; then
+          set +e
+          EXISTING_PR_NUMBER=$(gh pr list --base "$TARGET_BRANCH" --label "$FIRST_LABEL" --state open --json number --jq '.[0].number' 2>/dev/null)
+          GH_EXIT_CODE=$?
+          set -e
+
+          if [ $GH_EXIT_CODE -ne 0 ]; then
+            echo "::warning::Failed to check for existing PRs - proceeding with PR creation"
+          elif [ -n "$EXISTING_PR_NUMBER" ] && [ "$EXISTING_PR_NUMBER" != "null" ]; then
+            EXISTING_PR_URL=$(gh pr view "$EXISTING_PR_NUMBER" --json url --jq '.url')
+            echo "::notice::Existing upstream sync PR found: $EXISTING_PR_URL - skipping PR creation"
+            echo "pr_url=$EXISTING_PR_URL" >> $GITHUB_OUTPUT
+            echo "pr_number=$EXISTING_PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "skipped=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
         fi
 
         SYNC_BRANCH="sync-upstream-${RUN_ID}-${RUN_ATTEMPT}"
