@@ -57,9 +57,11 @@ runs:
   steps:
     - name: Validate inputs
       shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
       run: |
-        if [[ "${{ inputs.mode }}" != "pr" && "${{ inputs.mode }}" != "direct" ]]; then
-          echo "::error::Invalid mode '${{ inputs.mode }}'. Must be 'pr' or 'direct'."
+        if [[ "$MODE" != "pr" && "$MODE" != "direct" ]]; then
+          echo "::error::Invalid mode '$MODE'. Must be 'pr' or 'direct'."
           exit 1
         fi
 
@@ -71,19 +73,36 @@ runs:
 
     - name: Fetch upstream
       shell: bash
+      env:
+        UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+        UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
       run: |
-        git remote add upstream "https://github.com/${{ inputs.upstream_repo }}.git" 2>/dev/null || true
-        if ! git fetch upstream "${{ inputs.upstream_branch }}"; then
-          echo "::error::Failed to fetch upstream/${{ inputs.upstream_branch }} from ${{ inputs.upstream_repo }}"
+        UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}.git"
+
+        # Ensure upstream remote points to the correct URL
+        if git remote get-url upstream &>/dev/null; then
+          CURRENT_URL=$(git remote get-url upstream)
+          if [[ "$CURRENT_URL" != "$UPSTREAM_URL" ]]; then
+            echo "::notice::Updating upstream remote URL from $CURRENT_URL to $UPSTREAM_URL"
+            git remote set-url upstream "$UPSTREAM_URL"
+          fi
+        else
+          git remote add upstream "$UPSTREAM_URL"
+        fi
+
+        if ! git fetch upstream "$UPSTREAM_BRANCH"; then
+          echo "::error::Failed to fetch upstream/$UPSTREAM_BRANCH from $UPSTREAM_REPO"
           exit 1
         fi
 
     - name: Check for changes
       id: check
       shell: bash
+      env:
+        UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
       run: |
-        if ! DIFF=$(git rev-list --count HEAD.."upstream/${{ inputs.upstream_branch }}"); then
-          echo "::error::Failed to compare with upstream/${{ inputs.upstream_branch }}"
+        if ! DIFF=$(git rev-list --count HEAD.."upstream/$UPSTREAM_BRANCH"); then
+          echo "::error::Failed to compare with upstream/$UPSTREAM_BRANCH"
           exit 1
         fi
         echo "commits=$DIFF" >> $GITHUB_OUTPUT
@@ -99,16 +118,30 @@ runs:
       id: direct-push
       if: steps.check.outputs.has_changes == 'true' && inputs.mode == 'direct'
       shell: bash
+      env:
+        UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+        TARGET_BRANCH: ${{ inputs.target_branch }}
       run: |
+        # Ensure we are on the target branch (handles detached HEAD state)
+        CURRENT_BRANCH=$(git branch --show-current)
+        if [[ -z "$CURRENT_BRANCH" || "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]]; then
+          echo "::notice::Switching to '$TARGET_BRANCH'"
+          if ! git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"; then
+            echo "::error::Failed to checkout $TARGET_BRANCH"
+            exit 1
+          fi
+        fi
+
         # Merge upstream changes directly
-        if git merge "upstream/${{ inputs.upstream_branch }}" --no-edit; then
-          if ! git push origin "${{ inputs.target_branch }}"; then
-            echo "::error::Failed to push to ${{ inputs.target_branch }}"
+        if git merge "upstream/$UPSTREAM_BRANCH" --no-edit; then
+          if ! git push origin "$TARGET_BRANCH"; then
+            echo "::error::Failed to push to $TARGET_BRANCH"
             exit 1
           fi
           echo "::notice::Successfully synced with upstream (direct push)"
         else
           echo "::error::Merge conflicts detected - cannot push directly. Consider using mode: pr"
+          git merge --abort
           exit 1
         fi
 
@@ -118,14 +151,23 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
+        UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+        UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+        TARGET_BRANCH: ${{ inputs.target_branch }}
+        PR_TITLE: ${{ inputs.pr_title }}
+        PR_BODY_INPUT: ${{ inputs.pr_body }}
+        PR_LABELS: ${{ inputs.pr_labels }}
+        COMMITS_COUNT: ${{ steps.check.outputs.commits }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
-        SYNC_BRANCH="sync-upstream-$(date +%Y%m%d-%H%M%S)-$RANDOM"
+        SYNC_BRANCH="sync-upstream-${RUN_ID}-${RUN_ATTEMPT}"
 
         # Create and checkout sync branch
         git checkout -b "$SYNC_BRANCH"
 
         # Merge upstream changes
-        if git merge "upstream/${{ inputs.upstream_branch }}" --no-edit; then
+        if git merge "upstream/$UPSTREAM_BRANCH" --no-edit; then
           echo "::notice::Merged upstream changes successfully"
           HAS_CONFLICTS="false"
         else
@@ -155,56 +197,68 @@ runs:
         fi
 
         # Build PR body
-        PR_BODY="${{ inputs.pr_body }}"
-        if [ -z "$PR_BODY" ]; then
-          PR_BODY=$(cat <<EOF
-## Upstream Sync
+        if [ -z "$PR_BODY_INPUT" ]; then
+          PR_BODY="## Upstream Sync
 
-This PR syncs changes from [\`${{ inputs.upstream_repo }}\`](https://github.com/${{ inputs.upstream_repo }}).
+This PR syncs changes from [\`${UPSTREAM_REPO}\`](https://github.com/${UPSTREAM_REPO}).
 
-**Commits to sync:** ${{ steps.check.outputs.commits }}
-**Source branch:** \`${{ inputs.upstream_branch }}\`
-**Target branch:** \`${{ inputs.target_branch }}\`
-EOF
-)
+**Commits to sync:** ${COMMITS_COUNT}
+**Source branch:** \`${UPSTREAM_BRANCH}\`
+**Target branch:** \`${TARGET_BRANCH}\`"
+
           if [ "$HAS_CONFLICTS" = "true" ]; then
-            PR_BODY=$(cat <<EOF
-$PR_BODY
+            PR_BODY="${PR_BODY}
 
 > [!WARNING]
-> Merge conflicts were detected. Please resolve them manually before merging.
-EOF
-)
+> Merge conflicts were detected. Please resolve them manually before merging."
           fi
+        else
+          PR_BODY="$PR_BODY_INPUT"
         fi
 
         # Create PR with labels
-        LABELS="${{ inputs.pr_labels }}"
         LABEL_ARGS=()
-        if [ -n "$LABELS" ]; then
-          IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+        if [ -n "$PR_LABELS" ]; then
+          IFS=',' read -ra LABEL_ARRAY <<< "$PR_LABELS"
           for label in "${LABEL_ARRAY[@]}"; do
-            trimmed=$(echo "$label" | xargs)
+            # Trim whitespace without xargs (handles special characters safely)
+            trimmed=$(echo "$label" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             if [ -n "$trimmed" ]; then
               LABEL_ARGS+=(--label "$trimmed")
             fi
           done
         fi
 
-        PR_OUTPUT=$(gh pr create \
-          --title "${{ inputs.pr_title }}" \
+        # Create PR and capture stdout/stderr separately
+        PR_STDERR_FILE=$(mktemp)
+        set +e
+        PR_URL=$(gh pr create \
+          --title "$PR_TITLE" \
           --body "$PR_BODY" \
-          --base "${{ inputs.target_branch }}" \
+          --base "$TARGET_BRANCH" \
           --head "$SYNC_BRANCH" \
-          "${LABEL_ARGS[@]}" 2>&1)
+          "${LABEL_ARGS[@]}" 2>"$PR_STDERR_FILE")
         PR_EXIT_CODE=$?
+        set -e
 
-        if [ $PR_EXIT_CODE -eq 0 ] && [[ "$PR_OUTPUT" == https* ]]; then
-          PR_NUMBER=$(echo "$PR_OUTPUT" | grep -oE '[0-9]+$')
-          echo "pr_url=$PR_OUTPUT" >> $GITHUB_OUTPUT
+        if [ $PR_EXIT_CODE -ne 0 ]; then
+          PR_ERROR=$(cat "$PR_STDERR_FILE")
+          rm -f "$PR_STDERR_FILE"
+          echo "::error::Failed to create PR: $PR_ERROR"
+          exit 1
+        fi
+        rm -f "$PR_STDERR_FILE"
+
+        # Remove any trailing whitespace/newlines from URL
+        PR_URL=$(echo "$PR_URL" | tr -d '\n\r')
+
+        # Validate URL format and extract PR number
+        if [[ "$PR_URL" =~ ^https://github\.com/.+/pull/([0-9]+)$ ]]; then
+          PR_NUMBER="${BASH_REMATCH[1]}"
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "::notice::Created PR: $PR_OUTPUT"
+          echo "::notice::Created PR: $PR_URL"
         else
-          echo "::error::Failed to create PR: $PR_OUTPUT"
+          echo "::error::Unexpected PR URL format: $PR_URL"
           exit 1
         fi
