@@ -59,9 +59,16 @@ runs:
       shell: bash
       env:
         MODE: ${{ inputs.mode }}
+        UPSTREAM_REPO: ${{ inputs.upstream_repo }}
       run: |
         if [[ "$MODE" != "pr" && "$MODE" != "direct" ]]; then
           echo "::error::Invalid mode '$MODE'. Must be 'pr' or 'direct'."
+          exit 1
+        fi
+
+        # Validate upstream_repo format (owner/repo)
+        if [[ ! "$UPSTREAM_REPO" =~ ^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$ ]]; then
+          echo "::error::Invalid upstream_repo format '$UPSTREAM_REPO'. Expected 'owner/repo'."
           exit 1
         fi
 
@@ -161,6 +168,17 @@ runs:
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
+        # Check for existing open sync PRs
+        EXISTING_PR=$(gh pr list --base "$TARGET_BRANCH" --label "upstream-sync" --state open --json number,url --jq '.[0]')
+        if [ -n "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
+          EXISTING_PR_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number')
+          EXISTING_PR_URL=$(echo "$EXISTING_PR" | jq -r '.url')
+          echo "::notice::Existing upstream sync PR found: $EXISTING_PR_URL - skipping PR creation"
+          echo "pr_url=$EXISTING_PR_URL" >> $GITHUB_OUTPUT
+          echo "pr_number=$EXISTING_PR_NUMBER" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
         SYNC_BRANCH="sync-upstream-${RUN_ID}-${RUN_ATTEMPT}"
 
         # Create and checkout sync branch
