@@ -1,0 +1,146 @@
+name: 'Sync Upstream PR'
+description: 'Sync fork with upstream repository and create a Pull Request'
+author: 'kuma0128'
+
+branding:
+  icon: 'git-pull-request'
+  color: 'blue'
+
+inputs:
+  upstream_repo:
+    description: 'Upstream repository (e.g., awslabs/ssosync)'
+    required: true
+  upstream_branch:
+    description: 'Upstream branch to sync from'
+    required: false
+    default: 'main'
+  target_branch:
+    description: 'Target branch to sync to'
+    required: false
+    default: 'main'
+  pr_title:
+    description: 'Pull request title'
+    required: false
+    default: 'chore: Sync with upstream'
+  pr_body:
+    description: 'Pull request body'
+    required: false
+    default: ''
+  pr_labels:
+    description: 'Comma-separated labels for the PR'
+    required: false
+    default: 'upstream-sync'
+  token:
+    description: 'GitHub token with repo and pull-request permissions'
+    required: true
+
+outputs:
+  has_changes:
+    description: 'Whether there are changes to sync'
+    value: ${{ steps.check.outputs.has_changes }}
+  commits:
+    description: 'Number of commits behind upstream'
+    value: ${{ steps.check.outputs.commits }}
+  pr_number:
+    description: 'Created PR number (if any)'
+    value: ${{ steps.create-pr.outputs.pr_number }}
+  pr_url:
+    description: 'Created PR URL (if any)'
+    value: ${{ steps.create-pr.outputs.pr_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure git
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Fetch upstream
+      shell: bash
+      run: |
+        git remote add upstream "https://github.com/${{ inputs.upstream_repo }}.git" 2>/dev/null || true
+        git fetch upstream ${{ inputs.upstream_branch }}
+
+    - name: Check for changes
+      id: check
+      shell: bash
+      run: |
+        DIFF=$(git rev-list --count HEAD..upstream/${{ inputs.upstream_branch }})
+        echo "commits=$DIFF" >> $GITHUB_OUTPUT
+        if [ "$DIFF" -gt 0 ]; then
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "::notice::Found $DIFF new commits from upstream"
+        else
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+          echo "::notice::Already up to date with upstream"
+        fi
+
+    - name: Create sync branch and PR
+      id: create-pr
+      if: steps.check.outputs.has_changes == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        SYNC_BRANCH="sync-upstream-$(date +%Y%m%d-%H%M%S)"
+
+        # Create and checkout sync branch
+        git checkout -b "$SYNC_BRANCH"
+
+        # Merge upstream changes
+        if git merge "upstream/${{ inputs.upstream_branch }}" --no-edit; then
+          echo "::notice::Merged upstream changes successfully"
+          HAS_CONFLICTS="false"
+        else
+          echo "::warning::Merge conflicts detected - PR will need manual resolution"
+          git add -A
+          git commit -m "chore: sync with upstream (conflicts need resolution)" --no-verify || true
+          HAS_CONFLICTS="true"
+        fi
+
+        # Push the branch
+        git push origin "$SYNC_BRANCH"
+
+        # Build PR body
+        PR_BODY="${{ inputs.pr_body }}"
+        if [ -z "$PR_BODY" ]; then
+          PR_BODY="## Upstream Sync
+
+        This PR syncs changes from [\`${{ inputs.upstream_repo }}\`](https://github.com/${{ inputs.upstream_repo }}).
+
+        **Commits to sync:** ${{ steps.check.outputs.commits }}
+        **Source branch:** \`${{ inputs.upstream_branch }}\`
+        **Target branch:** \`${{ inputs.target_branch }}\`"
+
+          if [ "$HAS_CONFLICTS" = "true" ]; then
+            PR_BODY="$PR_BODY
+
+        > [!WARNING]
+        > Merge conflicts were detected. Please resolve them manually before merging."
+          fi
+        fi
+
+        # Create PR
+        LABELS="${{ inputs.pr_labels }}"
+        LABEL_ARGS=""
+        if [ -n "$LABELS" ]; then
+          LABEL_ARGS="--label $LABELS"
+        fi
+
+        PR_URL=$(gh pr create \
+          --title "${{ inputs.pr_title }}" \
+          --body "$PR_BODY" \
+          --base "${{ inputs.target_branch }}" \
+          --head "$SYNC_BRANCH" \
+          $LABEL_ARGS 2>&1) || true
+
+        if [[ "$PR_URL" == https* ]]; then
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "::notice::Created PR: $PR_URL"
+        else
+          echo "::warning::Failed to create PR: $PR_URL"
+        fi
