@@ -55,6 +55,14 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        if [[ "${{ inputs.mode }}" != "pr" && "${{ inputs.mode }}" != "direct" ]]; then
+          echo "::error::Invalid mode '${{ inputs.mode }}'. Must be 'pr' or 'direct'."
+          exit 1
+        fi
+
     - name: Configure git
       shell: bash
       run: |
@@ -65,13 +73,19 @@ runs:
       shell: bash
       run: |
         git remote add upstream "https://github.com/${{ inputs.upstream_repo }}.git" 2>/dev/null || true
-        git fetch upstream ${{ inputs.upstream_branch }}
+        if ! git fetch upstream "${{ inputs.upstream_branch }}"; then
+          echo "::error::Failed to fetch upstream/${{ inputs.upstream_branch }} from ${{ inputs.upstream_repo }}"
+          exit 1
+        fi
 
     - name: Check for changes
       id: check
       shell: bash
       run: |
-        DIFF=$(git rev-list --count HEAD..upstream/${{ inputs.upstream_branch }})
+        if ! DIFF=$(git rev-list --count HEAD.."upstream/${{ inputs.upstream_branch }}"); then
+          echo "::error::Failed to compare with upstream/${{ inputs.upstream_branch }}"
+          exit 1
+        fi
         echo "commits=$DIFF" >> $GITHUB_OUTPUT
         if [ "$DIFF" -gt 0 ]; then
           echo "has_changes=true" >> $GITHUB_OUTPUT
@@ -88,7 +102,10 @@ runs:
       run: |
         # Merge upstream changes directly
         if git merge "upstream/${{ inputs.upstream_branch }}" --no-edit; then
-          git push origin ${{ inputs.target_branch }}
+          if ! git push origin "${{ inputs.target_branch }}"; then
+            echo "::error::Failed to push to ${{ inputs.target_branch }}"
+            exit 1
+          fi
           echo "::notice::Successfully synced with upstream (direct push)"
         else
           echo "::error::Merge conflicts detected - cannot push directly. Consider using mode: pr"
@@ -102,7 +119,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
       run: |
-        SYNC_BRANCH="sync-upstream-$(date +%Y%m%d-%H%M%S)"
+        SYNC_BRANCH="sync-upstream-$(date +%Y%m%d-%H%M%S)-$RANDOM"
 
         # Create and checkout sync branch
         git checkout -b "$SYNC_BRANCH"
@@ -113,52 +130,81 @@ runs:
           HAS_CONFLICTS="false"
         else
           echo "::warning::Merge conflicts detected - PR will need manual resolution"
-          git add -A
-          git commit -m "chore: sync with upstream (conflicts need resolution)" --no-verify || true
           HAS_CONFLICTS="true"
+
+          # Stage all files including those with conflict markers
+          git add -A
+
+          # Check if there are staged changes to commit
+          if git diff --cached --quiet; then
+            echo "::error::No changes staged after merge conflict - cannot create PR"
+            exit 1
+          fi
+
+          # Commit with conflict markers for manual resolution
+          if ! git commit -m "chore: sync with upstream (conflicts need resolution)" --no-verify; then
+            echo "::error::Failed to commit merge conflict state"
+            exit 1
+          fi
         fi
 
         # Push the branch
-        git push origin "$SYNC_BRANCH"
+        if ! git push origin "$SYNC_BRANCH"; then
+          echo "::error::Failed to push branch $SYNC_BRANCH"
+          exit 1
+        fi
 
         # Build PR body
         PR_BODY="${{ inputs.pr_body }}"
         if [ -z "$PR_BODY" ]; then
-          PR_BODY="## Upstream Sync
+          PR_BODY=$(cat <<EOF
+## Upstream Sync
 
-        This PR syncs changes from [\`${{ inputs.upstream_repo }}\`](https://github.com/${{ inputs.upstream_repo }}).
+This PR syncs changes from [\`${{ inputs.upstream_repo }}\`](https://github.com/${{ inputs.upstream_repo }}).
 
-        **Commits to sync:** ${{ steps.check.outputs.commits }}
-        **Source branch:** \`${{ inputs.upstream_branch }}\`
-        **Target branch:** \`${{ inputs.target_branch }}\`"
-
+**Commits to sync:** ${{ steps.check.outputs.commits }}
+**Source branch:** \`${{ inputs.upstream_branch }}\`
+**Target branch:** \`${{ inputs.target_branch }}\`
+EOF
+)
           if [ "$HAS_CONFLICTS" = "true" ]; then
-            PR_BODY="$PR_BODY
+            PR_BODY=$(cat <<EOF
+$PR_BODY
 
-        > [!WARNING]
-        > Merge conflicts were detected. Please resolve them manually before merging."
+> [!WARNING]
+> Merge conflicts were detected. Please resolve them manually before merging.
+EOF
+)
           fi
         fi
 
-        # Create PR
+        # Create PR with labels
         LABELS="${{ inputs.pr_labels }}"
-        LABEL_ARGS=""
+        LABEL_ARGS=()
         if [ -n "$LABELS" ]; then
-          LABEL_ARGS="--label $LABELS"
+          IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+          for label in "${LABEL_ARRAY[@]}"; do
+            trimmed=$(echo "$label" | xargs)
+            if [ -n "$trimmed" ]; then
+              LABEL_ARGS+=(--label "$trimmed")
+            fi
+          done
         fi
 
-        PR_URL=$(gh pr create \
+        PR_OUTPUT=$(gh pr create \
           --title "${{ inputs.pr_title }}" \
           --body "$PR_BODY" \
           --base "${{ inputs.target_branch }}" \
           --head "$SYNC_BRANCH" \
-          $LABEL_ARGS 2>&1) || true
+          "${LABEL_ARGS[@]}" 2>&1)
+        PR_EXIT_CODE=$?
 
-        if [[ "$PR_URL" == https* ]]; then
-          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
-          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+        if [ $PR_EXIT_CODE -eq 0 ] && [[ "$PR_OUTPUT" == https* ]]; then
+          PR_NUMBER=$(echo "$PR_OUTPUT" | grep -oE '[0-9]+$')
+          echo "pr_url=$PR_OUTPUT" >> $GITHUB_OUTPUT
           echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
-          echo "::notice::Created PR: $PR_URL"
+          echo "::notice::Created PR: $PR_OUTPUT"
         else
-          echo "::warning::Failed to create PR: $PR_URL"
+          echo "::error::Failed to create PR: $PR_OUTPUT"
+          exit 1
         fi
