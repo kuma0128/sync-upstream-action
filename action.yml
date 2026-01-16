@@ -1,5 +1,5 @@
-name: 'Sync Upstream PR'
-description: 'Sync fork with upstream repository and create a Pull Request'
+name: 'Sync Upstream'
+description: 'Sync fork with upstream repository via Pull Request or direct push'
 author: 'kuma0128'
 
 branding:
@@ -18,6 +18,10 @@ inputs:
     description: 'Target branch to sync to'
     required: false
     default: 'main'
+  mode:
+    description: 'Sync mode: "pr" creates a Pull Request, "direct" pushes directly to target branch'
+    required: false
+    default: 'pr'
   pr_title:
     description: 'Pull request title'
     required: false
@@ -77,9 +81,23 @@ runs:
           echo "::notice::Already up to date with upstream"
         fi
 
+    - name: Direct push to target branch
+      id: direct-push
+      if: steps.check.outputs.has_changes == 'true' && inputs.mode == 'direct'
+      shell: bash
+      run: |
+        # Merge upstream changes directly
+        if git merge "upstream/${{ inputs.upstream_branch }}" --no-edit; then
+          git push origin ${{ inputs.target_branch }}
+          echo "::notice::Successfully synced with upstream (direct push)"
+        else
+          echo "::error::Merge conflicts detected - cannot push directly. Consider using mode: pr"
+          exit 1
+        fi
+
     - name: Create sync branch and PR
       id: create-pr
-      if: steps.check.outputs.has_changes == 'true'
+      if: steps.check.outputs.has_changes == 'true' && inputs.mode == 'pr'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
